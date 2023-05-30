@@ -1,0 +1,44 @@
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+
+# the port to listen on
+PORT = 40000
+
+# the HTTP request handler
+class RequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        # read the request body
+        content_length = int(self.headers['Content-Length'])
+        
+        post_data = self.rfile.read(content_length)
+        
+        # extract X-Forwarded-For field from headers
+        x_forwarded_for = self.headers.get('X-Forwarded-For')
+        # print X-Forwarded-For field
+        print(f'X-Forwarded-For: {x_forwarded_for}')
+        
+        user_agent = self.headers.get('User-Agent', '')
+        print(f"User-Agent: {user_agent}")
+        # parse the JSON data
+        
+        queries = json.loads(post_data)
+        print(json.dumps(queries, indent=4))
+        
+        # create the response message
+        response_message = queries
+
+        # send the response headers
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+
+        # send the response body
+        self.wfile.write(response_message.encode())
+
+# create the HTTP server
+httpd = HTTPServer(('', PORT), RequestHandler)
+
+print(f"Listening on port {PORT}")
+
+# start the server
+httpd.serve_forever()

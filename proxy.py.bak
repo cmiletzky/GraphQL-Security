@@ -1,0 +1,181 @@
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+from enum import Enum
+import requests
+
+# address of real Graphql server
+Graphql_server = 'http://127.0.0.1:5000/graphql'
+
+# Enum for the types of rules
+RULE_TYPE = Enum('RULE_TYPE', ['FUNCTION', 'IP', 'USER_AGENT'])
+
+# Enum for the actions (accept or reject)
+ACTION = Enum('ACTION', ['ACCEPT', 'REJECT'])
+
+
+class Rule:
+    """
+    Represents a rule for accepting or rejecting requests.
+    """
+
+    def __init__(self, action, rule_type, data):
+        self.action = action
+        self.rule_type = rule_type
+        self.data = data
+
+
+class Function:
+    """
+    Represents a function being called in a request.
+    """
+
+    def __init__(self, func_name, params):
+        self.func_name = func_name
+        self.params = params
+
+
+# the port to listen on
+PORT = 40000
+rules = []
+
+
+def inspect(src_ip, user_agent, func):
+    for rule in rules:
+        if rule.rule_type == RULE_TYPE['IP'] and rule.data == src_ip:
+            if rule.action == ACTION['REJECT']:
+                return False
+            else:
+                return True
+        elif rule.rule_type == RULE_TYPE['USER_AGENT'] and rule.data == user_agent:
+            if rule.action == ACTION['REJECT']:
+                return False
+            else:
+                return True
+        elif rule.rule_type == RULE_TYPE['FUNCTION']\
+                and rule.data.params == func.params and rule.data.func_name == func.func_name:
+            if rule.action == ACTION['REJECT']:
+                return False
+            else:
+                return True
+
+
+def get_func_name(query):
+    try:
+        func_name = query.split("{")[1].split("(")[0].replace(" ", "").replace('\\n', '').replace('\\r', '')
+    except:
+        func_name = query.split("{")[1].replace(" ", "").replace('\n', '').replace('\r', '')
+    return func_name
+
+
+def extract_func(query):
+    func_name = get_func_name(query)
+    try:
+        params = []
+        params1 = query.split("{")[1].split("(")[1].split(")")[0].replace(" ", "").split(",")
+        for param in params1:
+            params.append(param.split(":")[0])
+    except:
+        params = None
+    func = Function(func_name, params)
+    return func
+
+
+# the HTTP request handler
+class RequestHandler(BaseHTTPRequestHandler):
+    def do_POST(self):
+        print("---MESSAGE RECEIVED---")
+        # read the request body
+        content_length = int(self.headers['Content-Length'])
+
+        post_data = self.rfile.read(content_length)
+
+        # extract X-Forwarded-For field from headers
+        src_ip = self.headers.get('X-Forwarded-For')
+        # print X-Forwarded-For field
+        print(f'IP: {src_ip}')
+
+        user_agent = self.headers.get('User-Agent', '')
+        print(f"User-Agent: {user_agent}")
+
+        query = post_data.decode().replace("\"", "").split("query:")[1][:-1]
+        func = extract_func(query)
+        if not func.params:
+            print(f"Function: {func.func_name}")
+        else:
+            print(f"Function: {func.func_name} {str(func.params)}")
+
+        accept = inspect(src_ip, user_agent, func)
+        # create the response message
+        if accept:
+            print("REQUEST APPROVED")
+            # Send the GraphQL request
+            new_data = json.loads(post_data)
+            response = requests.post(Graphql_server, json=new_data, headers=self.headers)
+            # Parse the response JSON
+            response_data = response.json()
+            # send the response headers
+            self.send_response(response.status_code)
+
+            for key, value in response.headers.items():
+                if key == 'Content-Length':
+                    cont_len = len(json.dumps(response_data))
+                    self.send_header('Content-Length', cont_len)
+                    continue
+                self.send_header(key, value)
+            self.end_headers()
+
+            # send the response body
+            self.wfile.write(json.dumps(response_data).encode())
+        # if the request should be rejected
+        else:
+            print("REQUEST REJECTED")
+            self.send_response(403)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write('Access Denied'.encode())
+
+
+def organize_rules(lst):
+    lst_res = []
+    for rule in lst:
+        rule_lst = rule.split(" ", 2)
+        if rule_lst[0].split(".")[1] == "FUNCTION":
+            try:
+                params = rule.split("[")[1].replace("]", "").replace("'", "").split(", ")
+            except:
+                params = None
+            data = Function(rule_lst[2].split(" ")[0], params)
+        else:
+            data = rule_lst[2]
+        new_rule = Rule(ACTION[rule_lst[1].split(".")[1]], RULE_TYPE[rule_lst[0].split(".")[1]], data)
+        lst_res.append(new_rule)
+    return lst_res
+
+
+def main():
+    banner = '''
+    ░██████╗░██████╗░░█████╗░██████╗░██╗░░██╗░██████╗░██╗░░░░░  ██████╗░██████╗░░█████╗░██╗░░██╗██╗░░░██╗
+    ██╔════╝░██╔══██╗██╔══██╗██╔══██╗██║░░██║██╔═══██╗██║░░░░░  ██╔══██╗██╔══██╗██╔══██╗╚██╗██╔╝╚██╗░██╔╝
+    ██║░░██╗░██████╔╝███████║██████╔╝███████║██║██╗██║██║░░░░░  ██████╔╝██████╔╝██║░░██║░╚███╔╝░░╚████╔╝░
+    ██║░░╚██╗██╔══██╗██╔══██║██╔═══╝░██╔══██║╚██████╔╝██║░░░░░  ██╔═══╝░██╔══██╗██║░░██║░██╔██╗░░░╚██╔╝░░
+    ╚██████╔╝██║░░██║██║░░██║██║░░░░░██║░░██║░╚═██╔═╝░███████╗  ██║░░░░░██║░░██║╚█████╔╝██╔╝╚██╗░░░██║░░░
+    ░╚═════╝░╚═╝░░╚═╝╚═╝░░╚═╝╚═╝░░░░░╚═╝░░╚═╝░░░╚═╝░░░╚══════╝  ╚═╝░░░░░╚═╝░░╚═╝░╚════╝░╚═╝░░╚═╝░░░╚═╝░░░'''
+    print(banner)
+    print("Pleas wait while loading the rules...")
+    lst = []
+    with open('rules.txt') as f:
+        for line in f.readlines():
+            if line:
+                lst.append(line.replace("\n", "", 1))
+    rules.extend(organize_rules(lst))
+    print("Initialize the proxy server...")
+
+    # create the HTTP server
+    httpd = HTTPServer(('', PORT), RequestHandler)
+    print(f"Listening on port {PORT}")
+    # start the server
+    httpd.serve_forever()
+
+
+if __name__ == '__main__':
+    main()

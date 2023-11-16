@@ -1,5 +1,5 @@
 # GraphQL-Security
-This project is POC for securing graphQL architecture.
+This project is a POC for securing graphQL architecture.
 GraphQL is a highly flexible query language that can express complex data requirements easily and in more detail than a traditional REST API.
 Our goal is to create a POC for securing this architecture.
 In this project, we created a layer that examines a large amount of traffic, based on this traffic this layer learns what legitimate traffic is.
